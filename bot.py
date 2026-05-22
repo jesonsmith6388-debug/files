@@ -6,7 +6,7 @@ import threading
 import time
 
 BOT_TOKEN = '8144392743:AAF0qG5TnvlhYcGZdlz7f3rwLpMBw3rXvqQ'
-ADMIN_CHAT_ID = '6434195233'
+ADMIN_CHAT_ID = '-1003981007597'
 PORT = 3000
 
 app = Flask(__name__)
